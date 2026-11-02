@@ -1,0 +1,121 @@
+-- =========================================================
+-- World Cinema – Supabase schema
+-- Run in: Supabase Dashboard > SQL Editor > New query > Run
+-- =========================================================
+
+-- 1) TABLES ------------------------------------------------
+create table if not exists public.films (
+  id          int primary key,
+  title       text not null,
+  year        int,
+  duration    text,
+  genre       text,
+  rating      text,
+  color1      text,
+  color2      text,
+  description text
+);
+
+create table if not exists public.theaters (
+  id      int primary key,
+  name    text not null,
+  address text,
+  price   int not null check (price >= 0)
+);
+
+create table if not exists public.food_items (
+  id          text primary key,
+  emoji       text,
+  name        text not null,
+  description text,
+  price       int not null check (price >= 0),
+  hot         boolean not null default false
+);
+
+-- One row per booked seat. The UNIQUE constraint makes double-booking impossible.
+create table if not exists public.booked_seats (
+  id         bigint generated always as identity primary key,
+  film_id    int  not null references public.films(id),
+  theater_id int  not null references public.theaters(id),
+  show_date  date not null default ((now() at time zone 'Asia/Jakarta')::date),
+  show_time  text not null,
+  seat       text not null check (seat ~ '^[A-H](1[0-2]|[1-9])$'),
+  order_code text,
+  created_at timestamptz not null default now(),
+  unique (film_id, theater_id, show_date, show_time, seat)
+);
+
+-- NOTE: only the LAST 4 digits of a card are stored. Never store full card
+-- numbers or CVV. For real payments use a gateway (Midtrans, Xendit, Stripe).
+create table if not exists public.orders (
+  code           text primary key,
+  film_id        int  not null references public.films(id),
+  theater_id     int  not null references public.theaters(id),
+  show_date      date not null default ((now() at time zone 'Asia/Jakarta')::date),
+  show_time      text not null,
+  seats          text[] not null check (cardinality(seats) between 1 and 8),
+  food           jsonb  not null default '[]'::jsonb,
+  total          int    not null check (total >= 0),
+  email          text,
+  payment_method text,
+  card_last4     text check (card_last4 ~ '^[0-9]{4}$'),
+  created_at     timestamptz not null default now()
+);
+
+create index if not exists booked_seats_lookup
+  on public.booked_seats (film_id, theater_id, show_date, show_time);
+
+-- 2) ROW LEVEL SECURITY -----------------------------------
+alter table public.films        enable row level security;
+alter table public.theaters     enable row level security;
+alter table public.food_items   enable row level security;
+alter table public.booked_seats enable row level security;
+alter table public.orders       enable row level security;
+
+-- Public catalogue: read-only
+drop policy if exists "read films"     on public.films;
+drop policy if exists "read theaters"  on public.theaters;
+drop policy if exists "read food"      on public.food_items;
+create policy "read films"    on public.films      for select to anon, authenticated using (true);
+create policy "read theaters" on public.theaters   for select to anon, authenticated using (true);
+create policy "read food"     on public.food_items for select to anon, authenticated using (true);
+
+-- Seats: anyone can see which seats are taken and book new ones (no update/delete)
+drop policy if exists "read booked seats"   on public.booked_seats;
+drop policy if exists "insert booked seats" on public.booked_seats;
+create policy "read booked seats"   on public.booked_seats for select to anon, authenticated using (true);
+create policy "insert booked seats" on public.booked_seats for insert to anon, authenticated with check (true);
+
+-- Orders: insert-only for the public site (contains emails, so NO public select)
+drop policy if exists "insert orders" on public.orders;
+create policy "insert orders" on public.orders for insert to anon, authenticated with check (true);
+
+-- 3) SEED DATA --------------------------------------------
+insert into public.films (id, title, year, duration, genre, rating, color1, color2, description) values
+(0,'Hacksaw Ridge',2016,'2j 19m','Perang, Drama','17+','#7a1f0c','#1c0a05','Desmond Doss, seorang paramedis yang menolak memegang senjata karena keyakinannya, bertugas di Pertempuran Okinawa. Di tengah pertempuran brutal di tebing Maeda, ia menyelamatkan puluhan prajurit yang terluka tanpa membawa senjata.'),
+(1,'Unbroken',2014,'2j 17m','Drama, Biografi','17+','#0f4c75','#06121c','Kisah nyata Louis Zamperini, atlet lari Olimpiade yang menjadi pembom Perang Dunia II. Pesawatnya jatuh di Samudra Pasifik, ia bertahan puluhan hari di rakit lalu ditahan di kamp tawanan Jepang.'),
+(2,'Despicable Me',2010,'1j 35m','Animasi, Komedi','SU','#f2c40f','#b0561a','Gru, penjahat super yang ingin mencuri bulan, mengadopsi tiga gadis yatim demi menjalankan rencananya. Tanpa disangka, ketiganya perlahan mengubah hidup Gru bersama para Minion yang kocak.'),
+(3,'Bapak Paling Jujur',2025,'1j 50m','Komedi, Keluarga','13+','#2e7d5b','#0a1f17','Komedi keluarga tentang seorang bapak yang berusaha tetap jujur di tengah godaan dan tekanan hidup sehari-hari. Kejujurannya justru membawa kekacauan lucu sekaligus menyentuh bagi keluarganya.'),
+(4,'Top Gun',1986,'1j 50m','Aksi, Drama','13+','#1f6fb2','#08121e','Pete “Maverick” Mitchell, pilot tempur Angkatan Laut yang berani dan nekat, masuk sekolah pilot elite Top Gun. Ia bersaing dengan sesama pilot terbaik sambil bergulat dengan masa lalunya.'),
+(5,'Agak Laen',2024,'1j 59m','Komedi, Horor','13+','#6a1b9a','#14061c','Empat sahabat mengelola wahana rumah hantu di pasar malam yang sepi pengunjung. Saat kejadian aneh dan mengerikan mulai muncul, wahana mereka mendadak laris.')
+on conflict (id) do nothing;
+
+insert into public.theaters (id, name, address, price) values
+(0,'World Cinema Grand Indonesia','Lt. 8, Jl. M.H. Thamrin, Jakarta Pusat',65000),
+(1,'World Cinema Plaza Senayan','Lt. 5, Jl. Asia Afrika, Jakarta Pusat',60000),
+(2,'World Cinema Kota Kasablanka','Lt. 3, Jl. Casablanca, Jakarta Selatan',55000),
+(3,'World Cinema Pondok Indah Mall','Lt. 4, Jl. Metro Pondok Indah, Jakarta Selatan',60000),
+(4,'World Cinema Kelapa Gading','Lt. 3, Jl. Boulevard Kelapa Gading, Jakarta Utara',50000),
+(5,'World Cinema Central Park','Lt. 6, Jl. Letjen S. Parman, Jakarta Barat',55000)
+on conflict (id) do nothing;
+
+insert into public.food_items (id, emoji, name, description, price, hot) values
+('pc','🍿','Popcorn Besar Karamel','Popcorn karamel renyah, ukuran besar.',55000,false),
+('ps','🍿','Popcorn Asin Sedang','Klasik, gurih, pas untuk berdua.',40000,false),
+('cl','🥤','Cola Besar','Dingin dengan es, 700 ml.',30000,false),
+('ice','🧋','Es Teh Lemon','Teh segar dengan lemon.',25000,false),
+('nc','🧀','Nachos Keju','Nachos dengan saus keju hangat.',45000,false),
+('hd','🌭','Hot Dog Sosis Sapi','Sosis sapi, saus mustard dan tomat.',38000,false),
+('cb','🎟️','Paket Duo','1 popcorn besar + 2 minuman.',95000,true),
+('wt','💧','Air Mineral','Air mineral 600 ml.',12000,false)
+on conflict (id) do nothing;
